@@ -1,0 +1,6 @@
+{
+  "name": "chainlink-local-foundry",
+  "dependencies": {
+    "@chainlink/local": "^0.2.5-beta.0"
+  }
+}
