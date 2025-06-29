@@ -1,0 +1,253 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.29;
+
+import "forge-std/Test.sol";
+
+import {ERC20} from "@chainlink/contracts/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/ERC20.sol";
+
+import {CCIPLocalSimulator} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
+import {IRouterClient} from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
+import {MockCCIPRouter} from "@chainlink/contracts-ccip/contracts/test/mocks/MockRouter.sol";
+import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
+import {WETH9} from "@chainlink/local/src/shared/WETH9.sol";
+import {LinkToken} from "@chainlink/local/src/shared/LinkToken.sol";
+import {BurnMintERC677Helper} from "@chainlink/local/src/ccip/BurnMintERC677Helper.sol";
+
+import {CCTCP_Host} from "../../src/CCTCP_Host.sol";
+import {CCHTTP_Peer} from "../../src/CCHTTP_Peer.sol";
+import {HyperTokenFactory} from "../../src/hyperTokenFactory.sol";
+
+import {HyperABICoder} from "../../src/libraries/HyperABICoder.sol";
+import {CCHTTP_Types} from "../../src/CCHTTP_Types.sol";
+import {CCTCP_Types} from "../../src/CCTCP_Types.sol";
+
+contract mockTokenAdminRegistry {
+    function acceptAdminRole(address) external {}
+    function setPool(address, address) external {}
+}
+contract mockRegistryModuleOwnerCustom {
+    function registerAdminViaGetCCIPAdmin(address) external {}
+}
+
+contract MockAggregator {
+    int256 public answer;
+    uint8 public decimals;
+
+    constructor(int256 _answer, uint8 _decimals) {
+        answer = _answer;
+        decimals = _decimals;
+    }
+
+    function latestAnswer() external view returns (int256) {
+        return answer;
+    }
+
+    function latestRoundData()
+        external
+        view
+        returns (
+            uint80, int256, uint256, uint256, uint80
+        )
+    {
+        // Return dummy values for roundId, startedAt, updatedAt, answeredInRound
+        return (0, answer, 0, 0, 0);
+    }
+
+    function getDecimals() external view returns (uint8) {
+        return decimals;
+    }
+}
+
+contract anyERC20 is ERC20{
+    constructor(
+        string memory name,
+        string memory symbol,
+        uint8 decimals,
+        uint256 initialSupply
+    ) ERC20(name, symbol) {
+        _mint(msg.sender, initialSupply);
+        _setupDecimals(decimals);
+    }
+
+    function _setupDecimals(uint8 decimals) internal {
+        // This is a placeholder for setting up decimals if needed
+    }
+}
+
+contract HyperTokenFactoryTest is Test {
+    CCIPLocalSimulator simulator;
+    CCTCP_Host host;
+    CCHTTP_Peer peer;
+    HyperTokenFactory factory;
+
+    WETH9 wrappedEther;
+    LinkToken linkToken;
+
+    address payable user;
+    address router;
+
+    uint64 chainSelector;
+
+    mockTokenAdminRegistry tokenAdminRegistry;
+    mockRegistryModuleOwnerCustom regOwnerCustom;
+
+    IRouterClient routerSrc;
+    IRouterClient routerDst;
+
+    MockAggregator LINKUSD_aggregator;
+    MockAggregator ETHUSD_aggregator;
+
+    function setUp() public {
+        simulator = new CCIPLocalSimulator();
+        user = payable(makeAddr("user"));
+
+ 
+        uint64 _chainSelector;
+        IRouterClient _routerSrc;
+        IRouterClient _routerDst;
+        WETH9 _wrappedEther;
+        LinkToken _linkToken;
+        BurnMintERC677Helper _bnm1;
+        BurnMintERC677Helper _bnm2;
+
+        // Destructure directly from the function call
+        (_chainSelector, _routerSrc, _routerDst, _wrappedEther, _linkToken, _bnm1, _bnm2) =
+            simulator.configuration();
+
+        // Now assign to state variables
+        chainSelector = _chainSelector;
+        routerSrc = _routerSrc;
+        routerDst = _routerDst;
+        wrappedEther = _wrappedEther;
+        linkToken = _linkToken;
+        router = address(_routerDst);
+        
+        // Deploy mocks
+        tokenAdminRegistry = new mockTokenAdminRegistry();
+        regOwnerCustom = new mockRegistryModuleOwnerCustom();
+
+        LINKUSD_aggregator = new MockAggregator(13 * 10**8, 18); // $13 with 8 decimals
+        ETHUSD_aggregator = new MockAggregator(2600 * 10**8, 18); // $2000 with 8 decimals
+
+        // Deploy and initialize Host
+        host = new CCTCP_Host();
+        
+        // Deploy and initialize Peer
+        peer = new CCHTTP_Peer();
+        
+        // Deploy and initialize Factory
+        factory = new HyperTokenFactory();
+        
+            
+        // Initialize Host
+        host.init(
+            chainSelector,
+            router,
+            address(linkToken),
+            address(peer),
+            address(0), // hyperLinkToken (not used in test)
+            address(wrappedEther),
+            address(ETHUSD_aggregator), // ethUSDPriceAggregator
+            address(LINKUSD_aggregator) // linkUSDPriceAggregator
+        );
+
+        // Initialize Peer
+        peer.init(
+            chainSelector,
+            router,
+            address(linkToken),
+            address(wrappedEther),
+            address(host),
+            address(factory)
+        );
+
+        // Initialize Factory
+        factory.init(
+            chainSelector,
+            router,
+            address(linkToken),
+            address(wrappedEther),
+            "Ether", // nativeName
+            "ETH", // nativeSymbol
+            18, // nativeDecimals
+            address(tokenAdminRegistry),
+            address(regOwnerCustom),
+            address(0), // RMN (mock/0)
+            address(peer)
+        );
+    }
+
+
+    function testReceiveDeployAndMint() public{
+        anyERC20 token = new anyERC20("Pepito", "PPT", 18, 1000 * 10**18);
+
+        address bob = makeAddr("bob");
+        address alice = makeAddr("alice");
+
+        CCHTTP_Types.deploy_and_mint_mssg memory deployAndMintMssg = CCHTTP_Types.deploy_and_mint_mssg(
+            6, // name_length
+            "pepito", // name
+            3, // symbol_length
+            "PPT", // symbol
+            18, // decimals
+            bob, // deployer
+            1000 * 10**18, // chainSupply
+            address(0), // expectedTokenAddress (not used in test)
+            CCHTTP_Types.HyperToken_Types.HyperERC20, // tokenType
+            address(token), // backingToken (not used in test)
+            0 // tokenId (not used in test)
+        );
+
+        bytes memory encodedDnM = HyperABICoder.encodeDeployAndMintMessage(deployAndMintMssg);
+
+        CCHTTP_Types.CCHTTP_Message memory message = CCHTTP_Types.CCHTTP_Message(
+            CCHTTP_Types.CCHTTP_Operation.DEPLOY_AND_MINT,
+            encodedDnM
+        );
+
+        bytes memory encodedCCHTTPMessage = HyperABICoder.encodeCCHTTP_Message(message);
+
+        CCTCP_Types.CCTCP_Segment memory segment = CCTCP_Types.CCTCP_Segment(
+            1, // CCTCP_Seg_Id
+            CCTCP_Types.CCTCP_Segment_Type.Data, // CCTCP_Seg_Type
+            address(linkToken), // CCIP_ops_token
+            0, // CCIP_ops_amount (not used in test)
+            encodedCCHTTPMessage // data
+        );
+
+        bytes memory encodedSegment = HyperABICoder.encodeCCTCP_Segment(segment);
+
+        // Simulate a received CCIP message with no token transfer 
+        // and encodedSegment as data
+        Client.EVMTokenAmount[] memory tokenAmounts = new Client.EVMTokenAmount[](0);
+
+        Client.Any2EVMMessage  memory ccipMsg = Client.Any2EVMMessage(
+            "", // messageId (can be empty for test)
+            uint64(0), // sourceChainSelector (not used in test)
+            abi.encode(address(host)), // sender (encoded bob address)
+            encodedSegment, // data (the encoded segment)
+            tokenAmounts // no token transfers
+        );
+
+        simulator.requestLinkFromFaucet(
+            address(host),
+            10 * 10**18 // Request 10 LINK for the test
+        );
+
+        MockCCIPRouter mRouterDst = MockCCIPRouter(router);
+        (
+            bool success,
+            bytes memory retData,
+            uint256 gasUsed
+        ) = mRouterDst.routeMessage(
+            ccipMsg,
+            uint16(5000), //gas for exact call check
+            8000000, // gas limit for the call
+            address(host) // receiver (the host contract)
+        );
+
+        // Check if the message was processed successfully
+        assertTrue(success, "Message processing failed");
+        console.log("Gas used:", gasUsed);        
+    }
+}

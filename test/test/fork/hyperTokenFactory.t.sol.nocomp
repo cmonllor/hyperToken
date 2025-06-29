@@ -1,0 +1,508 @@
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.29;
+
+import "forge-std/Test.sol";
+import "forge-std/console.sol";
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+
+import {WETH9} from "@chainlink/contracts/src/v0.8/vendor/canonical-weth/WETH9.sol";
+
+import {CCIPLocalSimulatorFork, Register} from "@chainlink/local/src/ccip/CCIPLocalSimulatorFork.sol";
+
+import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
+import {IRouterClient} from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
+
+import {Helper} from "../../script/Helper.sol";
+
+import {CCHTTP_Peer} from "../../src/CCHTTP_Peer.sol";
+import {ICCHTTP_Consumer} from "../../src/interfaces/ICCHTTP_Consumer.sol";
+import {CCHTTP_Types} from "../../src/CCHTTP_Types.sol";
+
+import {HyperABICoder} from "../../src/libraries/HyperABICoder.sol";
+import {CCTCP_Types} from "../../src/CCTCP_Types.sol";
+import {CCTCP_Host} from "../../src/CCTCP_Host.sol";
+import {CCHTTP_Types} from "../../src/CCHTTP_Types.sol";
+import {CCHTTP_Peer} from "../../src/CCHTTP_Peer.sol";
+//import {ERC20Backed_hyperToken} from "../../src/ERC20Backed_hyperToken.sol";
+
+import {ICCTCP_Consumer} from "../../src/interfaces/ICCTCP_Consumer.sol";
+import {IHyperTokenFactory} from "../../src/interfaces/IHyperTokenFactory.sol";
+import {HyperTokenFactory} from "../../src/hyperTokenFactory.sol";
+
+
+contract mockERC20 is ERC20, ERC20Burnable {
+    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function burn(uint256 amount) public override {
+        super.burn(amount);
+    }
+
+    function burnFrom(address account, uint256 amount) public override {
+        super.burnFrom(account, amount);
+    }
+}
+
+contract HyperTokenFactoryTest is Test {
+    using HyperABICoder for bytes;
+
+
+    event DebugTest(string message);
+    event DebugBytesTest(bytes data);
+    event DebugBytesTest(string message, bytes data);
+
+    address payable user;
+
+    CCIPLocalSimulatorFork simulator;
+
+   
+    uint256 arbForkId;
+    uint256 optForkId;
+
+    mockERC20 arbPepitoToken;
+
+    HyperTokenFactory arbFactory;
+    HyperTokenFactory optFactory;
+    
+    CCHTTP_Peer arbPeer;
+    CCTCP_Host arbHost;
+
+    CCHTTP_Peer optPeer;
+    CCTCP_Host optHost;
+
+    address arbLinkToken;
+    address optLinkToken;
+
+    address payable arbWrappedEther;
+    address payable optWrappedEther;
+
+    address arbRouter;
+    address optRouter;
+
+    uint64 arbChainSelector;
+    uint64 optChainSelector;
+
+    address arbWETHUSD_Aggregator;
+    address arbLINKUSD_Aggregator;
+    
+    address optWETHUSD_Aggregator;
+    address optLINKUSD_Aggregator;
+
+ 
+    // Setup function
+    function setUp() public {
+        // Initialize the CCIP Local Simulator Fork       
+        simulator = new CCIPLocalSimulatorFork();
+        vm.makePersistent(address(simulator));
+
+        user = payable(makeAddr("user"));
+
+        string memory arbURL = vm.envString("ARBITRUM_SEPOLIA_RPC_URL");
+        string memory opURL = vm.envString("OPTIMISM_SEPOLIA_RPC_URL");
+        
+        arbForkId = vm.createFork(arbURL);
+        Register.NetworkDetails memory arbDetails = simulator.getNetworkDetails(
+            421614 // Arbitrum Sepolia chain ID
+        );
+        
+
+        arbLinkToken = arbDetails.linkAddress;
+        arbWrappedEther = payable(arbDetails.wrappedNativeAddress);
+
+        arbLINKUSD_Aggregator = 0x0FB99723Aee6f420beAD13e6bBB79b7E6F034298;
+        arbWETHUSD_Aggregator = 0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165;
+
+        arbChainSelector = arbDetails.chainSelector;
+        arbRouter = arbDetails.routerAddress;        
+
+
+        optForkId = vm.createFork(opURL);
+        Register.NetworkDetails memory optDetails = simulator.getNetworkDetails(
+            11155420 // Optimism Sepolia chain ID
+        );
+        optLinkToken = optDetails.linkAddress;
+        optWrappedEther = payable(optDetails.wrappedNativeAddress);
+
+        optChainSelector = optDetails.chainSelector;
+        optRouter = optDetails.routerAddress;
+
+        optWETHUSD_Aggregator = 0x0D41087ab4b10889312cc70A2582788270811c07;
+        optLINKUSD_Aggregator = 0x53f91dA33120F44893CB896b12a83551DEDb31c6;
+
+        bytes32 hostSalt = keccak256(abi.encodePacked("CCTCP_Host", address(this)));
+        bytes32 peerSalt = keccak256(abi.encodePacked("CCHTTP_Peer", address(this)));
+        bytes32 factorySalt = keccak256(abi.encodePacked("HyperTokenFactory", address(this)));
+
+        vm.selectFork(arbForkId);
+        vm.startPrank(user);
+
+        // Deploy contracts Host and Peer first, then initialize them
+        // This is to ensure that the addresses are deterministic and match the ones in the fork
+        arbHost = new CCTCP_Host{salt: hostSalt}();
+        address arbHostAddress = address(arbHost);
+
+        arbPeer = new CCHTTP_Peer{salt: peerSalt}();
+        address arbPeerAddress = address(arbPeer);
+
+        arbFactory = new HyperTokenFactory{salt: factorySalt}();
+        address arbFactoryAddress = address(arbFactory);
+
+        arbHost.init(
+            arbChainSelector,
+            arbRouter, // router
+            arbLinkToken, // linkToken
+            arbPeerAddress, // peer
+            address(0), //hyperLink not implemented and not used in this test
+            arbWrappedEther, // wrappedNative
+            arbWETHUSD_Aggregator, // WETH/USD aggregator
+            arbLINKUSD_Aggregator // LINK/USD aggregator
+        );
+        //enable optimism in the host
+        arbHost.enableChain(optChainSelector, optLinkToken);
+
+        // Initialize the peer with necessary parameters
+        arbPeer.init(
+            arbChainSelector,
+            arbRouter, // router
+            arbLinkToken, // linkToken
+            arbWrappedEther, // wrappedNative
+            arbHostAddress, // host
+            arbFactoryAddress // hyperTokenFactory will be simulated in this test
+        );
+
+        Helper helper = new Helper();
+        vm.makePersistent(address(helper));
+
+        (
+            address arbRMN, 
+            address arbTokenAdminRegistry, 
+            address arbRegOwnerCustom 
+        ) = helper.getCCTAddressesByNetwork(Helper.SupportedNetworks.ARBITRUM_SEPOLIA);
+
+        //init Factory
+        arbFactory.init(
+            arbChainSelector,
+            arbRouter, // router
+            arbLinkToken, // linkToken
+            arbWrappedEther, // wrappedNative
+            "Arbitrum ETH", // nativeName
+            "ArbETH", // nativeSymbol
+            18, // nativeDecimals
+            arbTokenAdminRegistry, // tokenAdminRegistry
+            arbRegOwnerCustom, // regOwnerCustom
+            arbRMN,
+            address(arbPeer) // CCHTTP_Peer
+        );
+        arbFactory.enablePeerChain( optChainSelector );
+
+        vm.selectFork(optForkId);
+        // Deploy the CCTCP_Host contract
+        optHost = new CCTCP_Host{salt: hostSalt}();
+        assertEq(arbHostAddress, address(optHost), "Host address mismatch");
+
+        optPeer = new CCHTTP_Peer{salt: peerSalt}();
+        assertEq(arbPeerAddress, address(optPeer), "Peer address mismatch");
+
+        optFactory = new HyperTokenFactory{salt: factorySalt}();
+        assertEq(arbFactoryAddress, address(optFactory) , "Factory address mismatch");
+
+        // Initialize the host with necessary parameters
+        optHost.init(
+            optChainSelector,
+            optRouter, // router
+            optLinkToken, // linkToken
+            address(optPeer), // peer
+            address(0), // hyperLink not implemented and not used in this test
+            optWrappedEther, // wrappedNative
+            optWETHUSD_Aggregator, // WETH/USD aggregator
+            optLINKUSD_Aggregator // LINK/USD aggregator
+        );
+        //enable arbitrum in the host
+        optHost.enableChain(arbChainSelector, arbLinkToken);
+
+        // Initialize the peer with necessary parameters
+        optPeer.init(
+            optChainSelector,
+            optRouter, // router
+            optLinkToken, // linkToken
+            optWrappedEther, // wrappedNative
+            address(optHost), // host
+            address(optFactory) 
+        );
+
+        ( 
+            address optRMN,
+            address optTokenAdminRegistry, 
+            address optRegOwnerCustom 
+        ) = helper.getCCTAddressesByNetwork(Helper.SupportedNetworks.OPTIMISM_SEPOLIA);
+
+        //init Factory
+        optFactory.init(
+            optChainSelector,
+            optRouter, // router
+            optLinkToken, // linkToken
+            optWrappedEther, // wrappedNative
+            "Optimism ETH", // nativeName
+            "OptETH", // nativeSymbol
+            18, // nativeDecimals
+            optTokenAdminRegistry, // tokenAdminRegistry
+            optRegOwnerCustom, // regOwnerCustom
+            optRMN,
+            address(optPeer) // CCHTTP_Peer
+        );
+
+        optFactory.enablePeerChain(arbChainSelector);
+
+        vm.stopPrank();
+
+    }
+
+    function tryDeployAndMint() public returns (address){
+        emit DebugBytesTest("OptForkId: ", abi.encodePacked(optForkId));
+        emit DebugBytesTest("ArbForkId: ", abi.encodePacked(arbForkId));
+
+        vm.selectFork(optForkId);
+        simulator.requestLinkFromFaucet(address(optHost), 20 ether); //for pooling for ACKs
+
+        vm.selectFork(arbForkId);
+        vm.txGasPrice(15e9); // Set a gas price for the transaction
+        vm.startPrank(user);
+
+        vm.deal(user, 2 ether); // Give user 1 ETH //for gas
+        simulator.requestLinkFromFaucet(user, 20 ether); //for fees
+
+        //vm.pauseGasMetering();
+        
+        IERC20(arbLinkToken).transfer(
+            address(arbHost),
+            10 ether
+        );
+        WETH9(arbWrappedEther).deposit{value: 1 ether}(); // Wrap 1 ETH
+
+        //deploy a MockERC to wrap ion a ERC20Backed hyperToken
+        arbPepitoToken = new mockERC20("MockArbAnyToken", "MAT");
+        arbPepitoToken.mint(user, 1000 ether);
+
+        // Approve the factory to spend the backing token
+        arbPepitoToken.approve(address(arbFactory), 1000 ether);
+
+        HyperTokenFactory factory = HyperTokenFactory(address(arbFactory));
+        address hyperToken = factory.startHyperToken(
+            "HyperMockAnyToken",
+            "HMA",
+            18,
+            address(arbPepitoToken), // backing token
+            uint256(0), // tokenId, not used in this test
+            500 ether, // chain supply
+            CCHTTP_Types.HyperToken_Types.HyperERC20 // hyperTokenType
+        );
+
+        (uint256 fees, uint256 linkAmount) = factory.estimateDeploymentCost(
+            hyperToken,
+            optChainSelector,
+            arbWrappedEther, // fee token
+            arbLinkToken // link token
+        );
+
+        //increase amounts to ensure we cover fees
+        fees =  fees + (fees / 10);
+        linkAmount = linkAmount + ( linkAmount / 10);
+
+        emit DebugTest("Trying to send");
+
+        IERC20(arbLinkToken).approve(
+            address(factory),
+            linkAmount
+        );
+        IERC20(arbWrappedEther).approve(
+            address(factory),
+            fees
+        );
+        
+        factory.sendDeploymentToChain(
+            hyperToken,
+            optChainSelector,
+            400 ether, // chain supply
+            arbWrappedEther, // fee token
+            fees,
+            arbLinkToken, // CCIP ack token
+            linkAmount
+        );
+        emit DebugBytesTest("OptForkId: ", abi.encodePacked(optForkId));
+        emit DebugBytesTest("ArbForkId: ", abi.encodePacked(arbForkId));
+        // Simulate routing CCIP resulting message to OP fork
+        simulator.switchChainAndRouteMessage(optForkId);
+
+        console.log("HyperToken deployed at:", hyperToken);
+        emit DebugBytesTest("OptForkId: ", abi.encodePacked(optForkId));
+        emit DebugBytesTest("ArbForkId: ", abi.encodePacked(arbForkId));
+        //simulate routing the ACK back to Arbitrum fork
+        simulator.switchChainAndRouteMessage(arbForkId);
+
+        return address(hyperToken);
+    }
+
+
+    function tryCrossChainTransfer(  ) public returns (bool) {
+        address hyperTokenAddress = tryDeployAndMint();
+        //vm.startPrank(user);
+        vm.selectFork(optForkId);
+        uint256 userOptHyperPepitoBalance = IERC20(hyperTokenAddress).balanceOf(user);
+        emit DebugTest("User HyperPepito balance on Optimism: ");
+        emit DebugBytesTest(abi.encodePacked(userOptHyperPepitoBalance));
+
+        vm.selectFork(arbForkId);
+
+        uint256 userArbHyperPepitoBalance = IERC20(hyperTokenAddress).balanceOf(user);
+        emit DebugTest("User HyperPepito balance on Arbitrum: ");
+        emit DebugBytesTest(abi.encodePacked(userArbHyperPepitoBalance));
+        require(userArbHyperPepitoBalance > 1 ether, "User has not enough HyperPepito balance");
+
+        Client.EVMTokenAmount [] memory tokenAmounts;
+        tokenAmounts = new Client.EVMTokenAmount[](1);
+        tokenAmounts[0] = Client.EVMTokenAmount({
+            token: hyperTokenAddress,
+            amount: 1 ether
+        });
+
+        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
+            receiver: abi.encode(user), //no specific address, just send to the chain
+            data: new bytes(0), //no data
+            tokenAmounts: tokenAmounts,
+            feeToken: arbWrappedEther, //fee token
+            extraArgs: Client._argsToBytes(  Client.EVMExtraArgsV1({ gasLimit:0 })  )
+        });
+
+        uint256 fees = IRouterClient(arbRouter).getFee(
+            optChainSelector, // destination chain selector
+            message
+        );
+
+        IERC20(arbWrappedEther).approve(
+            arbRouter,
+            fees
+        );
+        IERC20(hyperTokenAddress).approve(
+            arbRouter,
+            1 ether
+        );
+        // Send the message to the CCIP router
+        IRouterClient(arbRouter).ccipSend(
+            optChainSelector,
+            message
+        );
+
+        assertEq(
+            IERC20(hyperTokenAddress).balanceOf(user),
+            userArbHyperPepitoBalance - 1 ether,
+            "User HyperPepito balance should be reduced by 1 ether"
+        );
+        emit DebugTest("Message sent to CCIP Router");
+
+        emit DebugBytesTest("OptForkId: ", abi.encodePacked(optForkId));
+        emit DebugBytesTest("ArbForkId: ", abi.encodePacked(arbForkId));
+        simulator.switchChainAndRouteMessage(optForkId);
+
+        assertEq(
+            IERC20(hyperTokenAddress).balanceOf(user),
+            userOptHyperPepitoBalance + 1 ether,
+            "User HyperPepito balance should be increased by 1 ether"
+        );
+        emit DebugTest("Message received on destination chain");
+        return true;
+    }
+
+    function tryDeployHyperNative() public returns (address) {
+        vm.selectFork(optForkId);
+        simulator.requestLinkFromFaucet(address(optHost), 20 ether); //for pooling for ACKs
+
+        vm.selectFork(arbForkId);
+        vm.txGasPrice(15e9); // Set a gas price for the transaction
+        vm.startPrank(user);
+
+        vm.deal(user, 2 ether); // Give user 1 ETH //for gas
+        WETH9(arbWrappedEther).deposit{value: 1 ether}(); // Wrap 1 ETH
+        simulator.requestLinkFromFaucet(user, 20 ether); //for fees
+
+        HyperTokenFactory factory = HyperTokenFactory(address(arbFactory));
+        
+        factory.deployHyperNative();
+
+        address hyperNative = factory.hyperNative();
+        require(hyperNative != address(0), "HyperNative should be deployed");
+        emit DebugTest("HyperNative deployed at: ");
+        emit DebugBytesTest(abi.encodePacked(hyperNative));
+         
+
+        (uint256 fees, uint256 linkAmount) = factory.estimateDeploymentCost(
+            hyperNative,
+            optChainSelector,
+            arbWrappedEther, // fee token
+            arbLinkToken // link token
+        );
+
+        //increase amounts to ensure we cover fees
+        fees =  fees + (fees / 10);
+        linkAmount = linkAmount + ( linkAmount / 10);
+
+        emit DebugTest("Trying to send");
+
+        IERC20(arbLinkToken).approve(
+            address(factory),
+            linkAmount
+        );
+        IERC20(arbWrappedEther).approve(
+            address(factory),
+            fees
+        );
+        
+        factory.sendDeploymentToChain(
+            hyperNative,
+            optChainSelector,
+            0, // chain supply
+            arbWrappedEther, // fee token
+            fees,
+            arbLinkToken, // CCIP ack token
+            linkAmount
+        );
+        
+        
+        simulator.switchChainAndRouteMessage(optForkId);
+
+        console.log("HyperNative deployed at:", hyperNative);
+        
+        emit DebugBytesTest("OptForkId: ", abi.encodePacked(optForkId));
+        emit DebugBytesTest("ArbForkId: ", abi.encodePacked(arbForkId));
+        
+        simulator.switchChainAndRouteMessage(arbForkId);
+        return hyperNative;
+    }
+
+
+    function testDeployAndMint() public {
+        bool success = tryCrossChainTransfer();
+        assertTrue(
+            success,
+            "Cross-chain transfer should be successful"
+        );
+        emit DebugTest("Cross-chain transfer successful");
+    }
+
+    function testDeployHyperNative() public {
+        address arbHyperNativeAddress = tryDeployHyperNative();
+
+        assertTrue(
+            arbHyperNativeAddress != address(0),
+            "HyperNative should be deployed successfully"
+        );
+        emit DebugTest("HyperNative deployed successfully at: ");
+        emit DebugBytesTest(abi.encodePacked(arbHyperNativeAddress));
+    }
+
+}
