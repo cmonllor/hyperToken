@@ -6,17 +6,17 @@ import {Script, console} from "forge-std/Script.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
+import {IRouterClient} from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
+
 import {CCIPLocalSimulatorFork, Register} from "@chainlink/local/src/ccip/CCIPLocalSimulatorFork.sol";
 
-import {Helper} from "../script/Helper.sol";
-
-import {HyperTokenManager} from "../src/hyperTokenManager.sol";
-import {CCHTTP_Types} from "../src/CCHTTP_Types.sol";
-
-contract DeployHyperNativeInChain is Script, Helper {
+contract MakeCrossChainTransfer is Script {
     using Strings for uint256;
 
-    address public hyperTokenManagerAddress;
+    CCIPLocalSimulatorFork simulator;
+
+    uint256 [] activeChains;
 
     struct chainInfo{
         uint256 chainId;
@@ -33,11 +33,7 @@ contract DeployHyperNativeInChain is Script, Helper {
         string rpcURL;
     }
 
-    CCIPLocalSimulatorFork public simulator;
-    mapping (uint256 => chainInfo) public chainDetails;
-    uint64 []  activeChains;
-
-    address public deployer;
+    mapping (uint256 chainIdx => chainInfo  ) chainDetails;
 
     function initChain(
         uint256 chainId,
@@ -62,7 +58,7 @@ contract DeployHyperNativeInChain is Script, Helper {
         chainDetails[chain].LINKUSD_Aggregator = LINKUSD_Aggregator;
         chainDetails[chain].NativeUSD_Aggregator = NativeUSD_Aggregator;
         chainDetails[chain].rpcURL = rpcURL;
-        activeChains.push(netDetails.chainSelector);
+        activeChains.push(chain);
     }
 
     function initChains() internal {    
@@ -100,80 +96,65 @@ contract DeployHyperNativeInChain is Script, Helper {
             0x98EeB02BC20c5e7079983e8F0D0D839dFc8F74fA,
             0x61Ec26aA57019C486B10502285c5A3D4A4750AD7
         );
-        
-        /*
-        Problems deploying: DISABLED FOR NOW
-
-        //Avalanche Fuji Chain
-        initChain(
-            43113, //avalanche fuji chainId
-            "Avalanche Fuji",
-            "Avax(Fuji)",
-            "AVAX",
-            vm.envString("AVALANCHE_FUJI_RPC_URL"),
-            0x34C4c526902d88a3Aa98DB8a9b802603EB1E3470,
-            0x5498BB86BC934c8D34FDA08E81D444153d0D06aD
-        );
-        ackFeePerChain[ activeChains[3] ] = [
-             36e15,
-            103e15,
-             10e15,
-            0
-        ];
-
-        */
     }
-
-
 
     function setUp() public {
         simulator = new CCIPLocalSimulatorFork();
         vm.makePersistent(address(simulator));
         initChains();
-
-        hyperTokenManagerAddress = 0xB5E5976985D9720625B0BefDD7989864dA2639b9; // HyperTokenManager address
     }
 
-    function run(uint chainIdx) external {
-        uint256 pk = vm.envUint("PRIVATE_KEY");
-        deployer = vm.addr(pk);
-        vm.startBroadcast(pk);
+    function run(
+        address hyperToken,
+        address destination,
+        uint256 destinationChainId,
+        uint256 amount,
+        address linkToken
+    ) external {
+        vm.startBroadcast();
 
-        HyperTokenManager manager = HyperTokenManager(hyperTokenManagerAddress);
+        
 
-        manager.deployHyperNative();
-        address hyperNative = manager.hyperNativeToken();
-
-        for (uint i=0; i < activeChains.length; i++) {
-            if(i == chainIdx) {
-                console.log("Skipping chain: ", chainDetails[chainIdx].name);
-                continue; // skip the current chain
+        // Get the chain index for the destination chain
+        uint256 destinationChainIdx = 0;
+        for (uint256 i = 0; i < activeChains.length; i++) {
+            if (chainDetails[i].chainId == destinationChainId) {
+                destinationChainIdx = i;
+                break;
             }
-            console.log("Deploying HyperNative in chain: ", chainDetails[i].name);
-
-            (uint256 fee, uint256 ackFee) = manager.estimateDeploymentCost(
-                hyperNative,
-                activeChains[i],
-                chainDetails[chainIdx].linkTokenAddress,
-                chainDetails[chainIdx].linkTokenAddress
-            );
-
-            fee = fee + 1e17; // add 0.1 LINK for safety
-
-            IERC20(chainDetails[chainIdx].linkTokenAddress).approve(
-                hyperTokenManagerAddress,
-                fee + ackFee + 1e18 // add 1 LINK for safety
-            );
-
-            manager.deployHyperTokenInChain(
-                hyperNative,
-                activeChains[i],
-                0, //supply 0 for native tokens
-                chainDetails[chainIdx].linkTokenAddress,
-                fee,
-                chainDetails[chainIdx].linkTokenAddress,
-                ackFee + 1e18 // add 1 LINK for safety
-            );
         }
+        
+        Client.EVMTokenAmount[] memory sentTokens = new Client.EVMTokenAmount[](1);
+        sentTokens[0] = Client.EVMTokenAmount({
+            token: hyperToken,
+            amount: amount
+        });
+
+        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
+            receiver: abi.encode(destination),
+            data: new bytes(0),
+            tokenAmounts: sentTokens,
+            feeToken: linkToken,
+            extraArgs: Client._argsToBytes(Client.EVMExtraArgsV1({gasLimit: 1000000 }))
+        });
+
+        IRouterClient router = IRouterClient(chainDetails[destinationChainIdx].routerAddress);
+
+        uint256 fee = router.getFee(
+            chainDetails[destinationChainIdx].chainSelector,
+            message
+        );
+        console.log("Estimated fee for cross-chain transfer: %s", fee);
+        IERC20(linkToken).approve(
+            address(router),
+            fee
+        );
+        bytes32 ccipId = router.ccipSend(
+            chainDetails[destinationChainIdx].chainSelector,
+            message
+        );
+        console.log("CCIP ID for cross-chain transfer: %s", Strings.toHexString(uint256(ccipId)));
+
+        vm.stopBroadcast();
     }
 }

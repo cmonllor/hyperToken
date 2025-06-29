@@ -24,7 +24,7 @@ Tests use the
 
 ## Testnets ##
 
-In the begginning, this project was intended to be in four chains:
+In the begginning, this project was intended to be deployed in four chains:
 . Ethereum Sepolia
 . Arbitrum Sepolia
 . Optimism Sepolia
@@ -35,11 +35,13 @@ At submission date, some problems found in Avalanche Fuji deployment process cou
 . Arbitrum Sepolia
 . Optimism Sepolia
 
-*A pity now we cannot apply for Avalanche track in Chromion Hackathon*
+*A pity, now we cannot apply for Avalanche track in Chromion Hackathon*
+
 
 ## Note for Chromion judges ##
 
 HyperToken was an idea originally for Block Magic hackathon in May'24. At the end of Block Magic hackathon I realized it wasn't possible to get even a half-working demo version and had to resign... project was not submitted. 
+
 
 ### What I did for Block Magic hackathon. ###
 
@@ -50,7 +52,9 @@ HyperToken was an idea originally for Block Magic hackathon in May'24. At the en
 .**hyperToken** Last year were developed versions of ERC20 and native backed hyperTokens.
 .**ProtocolFactory** Last year project had indeed a protocolFactory which deployed just main protocols. 
 
+
 ### What has been done for Chromion hackathon ###
+
 .**CCTCP_Host: ACK costs** Main novelty in CCTCP_Host is all logic trying to estimate ACK costs. Please refer the docs for more info.Even if a part of it has been discarded, it has been kept on published code commented as reference.
 .**CCTCP_Host: predicable address** Last year I didn't dare to modify dependencies code, so as it inherited from CCIP_Receiver which has chain dependant arguments in the constructor, its address was different on each chain. This year I modified dependencies and put them in [mods](mods/) directory, removing chain dependant arguments from constructor, to an init function.
 .**ProtocolFactory** ProtocolFactory this year handles main protocols deployment and most hyperTokens deployments. Usage of ERC195 Proxies is done also here.

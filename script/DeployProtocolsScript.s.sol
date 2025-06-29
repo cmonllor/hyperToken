@@ -115,7 +115,7 @@ contract DeployProtocolsScript is Script {
         {
             bytes32 prot_FactorySalt = keccak256(
                 abi.encodePacked(
-                    "ProtocolFactory 1.4",
+                    "ProtocolFactory 2.3",
                     protocolDeployer
                 )
             );
@@ -201,9 +201,7 @@ contract DeployProtocolsScript is Script {
         );
 
 
-        //TODO transfer LINK to CCTCP_Host deployment
-
-
+        
         for( uint256 i = 0; i < activeChains.length; i++ ){
             if( activeChains[i] == chain ){
                 continue;
