@@ -153,7 +153,8 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
 
         hyperLinkCtr.init(
             chainId, // Set the mother chain ID
-            linkToken // Set the link token address
+            linkToken, // Set the link token address
+            address(this) // Set the factory address
         );
 
         address hyperLinkPoolAddress = IProtocolFactory(protocolFactory).createHyperLinkPool(
@@ -246,7 +247,8 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
             address(0), // Pool address will be set later
             wrappedNative, // Wrapped native token address
             linkToken, // Link token address
-            hyperLinkToken // Hyperlink token address
+            hyperLinkToken, // Hyperlink token address
+            address(this) // Factory address
         );
 
         address pool = deployCCIP_Pool(
@@ -314,7 +316,8 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
                 address(0), // Pool address will be set later
                 wrappedNative, // Wrapped native token address
                 linkToken, // Link token address
-                hyperLinkToken // Hyperlink token address
+                hyperLinkToken, // Hyperlink token address
+                address(this) // Factory address
             );
         }
         else if( params.tokenType == CCHTTP_Types.HyperToken_Types.HyperERC721 ) {
@@ -336,7 +339,8 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
                 address(0), // Pool address will be set later
                 wrappedNative, // Wrapped native token address
                 linkToken, // Link token address
-                hyperLinkToken // Hyperlink token address
+                hyperLinkToken, // Hyperlink token address
+                address(this) // Factory address
             );
         } else {
             revert("Unknown token type");
@@ -624,9 +628,19 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
                 require(uint256(-deltaSupply) <= info.totalSupply, "Insufficient total supply for update");
                 uint256 absDeltaSupply = uint256(-deltaSupply);
                 info.totalSupply -= absDeltaSupply; // Decrease the total supply
+                if(
+                    info.tokenType == CCHTTP_Types.HyperToken_Types.HyperERC20 ||
+                    info.tokenType == CCHTTP_Types.HyperToken_Types.HyperNative
+                ){
+                    IERC20Backed_HyperToken(hyperToken).releaseBacking(
+                        absDeltaSupply, // Release the backing supply
+                        destination // Destination address
+                    ); // Call the releaseBacking function on the hyperToken contract
+                    emit Debug("updateSupply: Motherchain released backing supply");
+                }
             }
             else {
-                info.totalSupply += uint256(deltaSupply); // Increase the total supply
+                info.totalSupply += uint256(deltaSupply); // Increase the total supply    
             }
             
             // Update the supply on the hyperToken contract
@@ -642,8 +656,17 @@ contract HyperTokenFactory is IHyperTokenFactory, ICCHTTP_Consumer, FeesManager,
             emit Debug("updateSupply: Motherchain updated supply");
             return true;
 
-        } else {
-            // On child chain: send cross-chain request to Motherchain
+        } else { // On child chain 
+            // Check if the deltaSupply is negative and if it exceeds the total supply
+            if (deltaSupply < 0) {
+                uint256 absDeltaSupply = uint256(-deltaSupply);
+                IBurnMintERC20(hyperToken).burn(
+                    destination, // Destination address
+                    absDeltaSupply // Burn the backing supply
+                ); // Call the burn function on the hyperToken contract
+                emit Debug("updateSupply: Child chain burned hyperToken amount");
+            } 
+            //send cross-chain request to Motherchain
             CCHTTP_Types.updateSupplyParams memory params = CCHTTP_Types.updateSupplyParams({
                 chainId: info.motherChainId,
                 feeToken: feeToken,

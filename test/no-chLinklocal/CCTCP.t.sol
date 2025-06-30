@@ -199,14 +199,19 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
         // Initialize the mock router client
         routerClient = new mockRouterClient();
         
+        deployer = makeAddr("deployer");
+
         // Initialize the LINK and WETH token (mock)
         linkToken = new mockLinkToken("Mock LINK", "mLINK");
         wethToken = new mockWETH("Mock WETH", "mWETH");
-        // Mint some WETH tokens to the contract for testing
+        
+        mockLinkToken(linkToken).mint(deployer, 20 ether); // Mint 1000 LINK tokens to the deployer
         
         // Initialize the CCTCP_Host contract
         cctcpHost = new CCTCP_Host(deployer);
 
+        vm.startPrank(deployer);
+      
         mockAggregatorV3Interface mock_nativeAggregator = new mockAggregatorV3Interface(2700 * 10**8, 18); // Mock price of 2700 USD for native token
         mockAggregatorV3Interface mock_linkAggregator = new mockAggregatorV3Interface(13 * 10**18, 18); // Mock price of 13 USD for LINK token
 
@@ -221,6 +226,12 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
             address(mock_linkAggregator) // Address of the mock LINK price aggregator            
         );
 
+        ERC20(linkToken).approve(address(cctcpHost), 10 ether); // Approve the mock router client to spend LINK tokens
+        // Fund the CCTCP_Host with LINK tokens
+        cctcpHost.fundPoolWithLink(address(linkToken), 10 ether); // Fund the CCTCP_Host with 100 LINK tokens
+
+
+        vm.stopPrank();
         // Set the chain ID for testing
         chainId = 1; // Example chain ID
     }
@@ -229,12 +240,7 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
 
     function testDeployment(
     ) public {
-        deployer = vm.addr(1);
-        vm.startPrank(deployer);
-
         setUp();
-
-        vm.stopPrank();
         // Check if the CCTCP_Host contract is deployed correctly
         assertNotEq(address(cctcpHost), address(0), "CCTCP_Host contract should be deployed");
 
@@ -243,19 +249,17 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
 
 
     function testSendMessage() public {
-        vm.startPrank(msg.sender);
-
+        setUp();
+        vm.startPrank(address(this));
         //mint some native ETH to the contract
         //vm.deal(msg.sender, 100 ether); // Mint 100 ETH to the contract
         
         //transfer from default sender top testContract
-        vm.deal(msg.sender, 101 ether); // Mint 100 ETH to the test contract
-
-        setUp();
+        vm.deal(address(this), 101 ether); // Mint 100 ETH to the test contract
 
         
         // Mint some LINK tokens to the contract for testing
-        linkToken.mint(msg.sender, 1000 ether); // Mint 1000 LINK tokens
+        mockLinkToken(linkToken).mint(address(this), 1000 ether); // Mint 1000 LINK tokens
 
         // Approve the CCTCP_Host to spend LINK tokens
         linkToken.approve(address(cctcpHost), 100 ether); // Approve the CCTCP_Host to spend LINK tokens
@@ -302,9 +306,10 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
 
 
     function testReceiveMessageNoACK() public {
-        // Test receiving a message using CCTCP_Host
-        vm.startPrank(msg.sender);
         setUp();
+
+        // Test receiving a message using CCTCP_Host
+        vm.startPrank(address(this));
 
         CCTCP_Types.CCTCP_Segment memory segment = CCTCP_Types.CCTCP_Segment({
             CCTCP_Seg_Id: 1, // Example segment ID
@@ -399,14 +404,14 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
 */
 
     function testProcessACK() public {
-        // Test processing an ACK message
-        vm.startPrank(msg.sender);
-
         setUp();
+        // Test processing an ACK message
+        vm.startPrank(address(this));
+
 
         //send the message so tcpHost has it and can recognize ACK
         //mint some native ETH to the contract
-        vm.deal(msg.sender, 101 ether); // Mint 100 ETH to the test contract
+        vm.deal(address(this), 101 ether); // Mint 100 ETH to the test contract
         //wrap the ETH to WETH
         wethToken.wrap{value: 100 ether}(); // Wrap the ETH to WETH
 
@@ -414,11 +419,9 @@ contract CCTCP_Test is Test, ICCTCP_Consumer {
         wethToken.approve(address(cctcpHost), 10 ether); // Approve the CCTCP_Host to spend WETH
 
         //mint some native LINK to the contract
-        linkToken.mint(msg.sender, 100 ether); // Mint 100 LINK tokens
+        linkToken.mint(address(this), 100 ether); // Mint 100 LINK tokens
         //fund cctcpHost with some LINK
         linkToken.approve(address(cctcpHost), 10 ether); // Approve the CCTCP_Host to spend LINK tokens
-        // Fund the CCTCP_Host with LINK tokens
-        cctcpHost.fundPoolWithLink(address(linkToken), 10 ether); // Fund the CCTCP_Host with 100 LINK tokens
         // Send a message to the CCTCP_Host
         ICCTCP_Host.sendMessageParams memory params = ICCTCP_Host.sendMessageParams({
             destChain: 2, // Example destination chain ID

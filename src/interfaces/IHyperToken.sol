@@ -9,7 +9,8 @@ interface IHyperToken is IERC20, IERC20Metadata{
         uint64 motherChain,
         string memory name,
         string memory symbol,
-        uint8 decimals
+        uint8 decimals,
+        address factory
     ) external;
 
     function updateSupply(

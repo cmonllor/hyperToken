@@ -107,22 +107,12 @@ contract MakeCrossChainTransfer is Script {
     function run(
         address hyperToken,
         address destination,
-        uint256 destinationChainId,
+        uint256 destinationChainIdx,
         uint256 amount,
         address linkToken
     ) external {
         vm.startBroadcast();
-
-        
-
-        // Get the chain index for the destination chain
-        uint256 destinationChainIdx = 0;
-        for (uint256 i = 0; i < activeChains.length; i++) {
-            if (chainDetails[i].chainId == destinationChainId) {
-                destinationChainIdx = i;
-                break;
-            }
-        }
+        require(destinationChainIdx < activeChains.length, "Invalid destination chain index");
         
         Client.EVMTokenAmount[] memory sentTokens = new Client.EVMTokenAmount[](1);
         sentTokens[0] = Client.EVMTokenAmount({

@@ -119,7 +119,7 @@ interface IHyperTokenManager {
     function isLastDeployment(
         address hyperToken,
         uint64 chainId
-    ) external view returns (bool);
+    ) external /*view*/ returns (bool);
 
 
     function getSupplyOnChain(

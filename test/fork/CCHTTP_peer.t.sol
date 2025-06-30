@@ -117,7 +117,8 @@ contract CCHTTP_PeerTest is ICCHTTP_Consumer, Test {
         bytes32 peerSalt = keccak256(abi.encodePacked("CCHTTP_Peer", address(this)));
 
         vm.selectFork(arbForkId);
-
+        vm.startPrank(user);
+        
         // Deploy contracts Host and Peer first, then initialize them
         // This is to ensure that the addresses are deterministic and match the ones in the fork
         arbHost = new CCTCP_Host{salt: hostSalt}(user);
@@ -125,6 +126,8 @@ contract CCHTTP_PeerTest is ICCHTTP_Consumer, Test {
 
         arbPeer = new CCHTTP_Peer{salt: peerSalt}();
         peerAddress = address(arbPeer);
+
+        
 
         arbHost.init(
             arbChainSelector,
@@ -181,6 +184,7 @@ contract CCHTTP_PeerTest is ICCHTTP_Consumer, Test {
             address(this) // hyperTokenFactory will be simulated in this test
         );
 
+        vm.stopPrank();
     }
 
 

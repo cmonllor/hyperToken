@@ -61,8 +61,14 @@ contract NativeBacked_hyperToken is ERC20Backed_hyperToken {
             require( IERC20(wrappedNative).balanceOf(msg.sender) >= amount, "Not enough WETH balance");
             IERC20(wrappedNative).safeTransferFrom(msg.sender, address(this), amount);    
         }
-
-        _mint(msg.sender, amount);
+        IHyperTokenFactory(hT_Factory).updateSupply(
+            address(this),
+            int256(amount),
+            msg.sender,
+            address(0), //in motherChain, no CCIP msg is send for wrapping
+            uint256(0) // no fee in motherChain
+        );
+        crossChainSupply += amount; //update cross chain supply
     }
 }
 

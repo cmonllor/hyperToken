@@ -6,7 +6,8 @@ import {IHyperToken} from "./IHyperToken.sol";
 interface IHyperLINK is IHyperToken {
     function init(
         uint64 _motherChainId,
-        address _linkToken
+        address _linkToken,
+        address _hTFactory
     ) external;
 
     function setLinkPool(address _linkPool) external;

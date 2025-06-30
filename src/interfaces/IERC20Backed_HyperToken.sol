@@ -13,7 +13,8 @@ interface IERC20Backed_HyperToken is IHyperToken{
         address _pool,
         address _wrappedNative,
         address _linkToken,
-        address _hyperLinkToken
+        address _hyperLinkToken,
+        address _factory
     ) external;
 
     function wrap(

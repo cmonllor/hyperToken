@@ -8,9 +8,10 @@ import { ERC20 } from "@chainlink/contracts/src/v0.8/vendor/openzeppelin-solidit
 
 abstract contract HyperToken is  ERC20, AccessControl {
     uint8 private s_decimals;
-    uint256 private crossChainSupply;
+    uint256 internal crossChainSupply;
 
     address internal factory;
+    address internal hT_Factory;
 
     bytes32 public constant POOL_ROLE = keccak256("POOL_ROLE");
     uint64 public motherChainId;
@@ -45,18 +46,19 @@ abstract contract HyperToken is  ERC20, AccessControl {
         uint64 _motherChainId,
         string memory name_,
         string memory symbol_,
-        uint8 decimals_
+        uint8 decimals_,
+        address _hT_Factory
     ) public virtual {
         factory = msg.sender;
+        hT_Factory = _hT_Factory;
         motherChainId = _motherChainId;
 
         s_name = name_;
         s_symbol = symbol_;
         s_decimals = decimals_;
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(POOL_ROLE, msg.sender); //so it can do initial mint
+        _grantRole(DEFAULT_ADMIN_ROLE, hT_Factory); // so it can deploy children
+        _grantRole(POOL_ROLE, hT_Factory); // so it can mint/burn
     }
-
 
     function updateSupply(
         uint256 newSupply, 
@@ -64,14 +66,14 @@ abstract contract HyperToken is  ERC20, AccessControl {
     ) public onlyRole(DEFAULT_ADMIN_ROLE) {
         require(motherChainId == 0, "Children don't HODL"); // xD
         
-        uint256 currentSupply = totalSupply();
+        uint256 currentSupply = crossChainSupply;
         if(newSupply > currentSupply) {
             uint256 amountToMint = newSupply - currentSupply;
             _mint(from_to, amountToMint);
             crossChainSupply += amountToMint;
         } else if(newSupply < currentSupply) {
             uint256 amountToBurn = currentSupply - newSupply;
-            _burn(from_to, amountToBurn);
+            //burn already done in child chain
             crossChainSupply -= amountToBurn;
         }
     }

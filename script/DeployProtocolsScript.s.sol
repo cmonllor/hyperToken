@@ -115,7 +115,7 @@ contract DeployProtocolsScript is Script {
         {
             bytes32 prot_FactorySalt = keccak256(
                 abi.encodePacked(
-                    "ProtocolFactory 2.3",
+                    "ProtocolFactory 4.4",
                     protocolDeployer
                 )
             );

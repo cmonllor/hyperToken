@@ -34,7 +34,8 @@ contract ERC20Backed_hyperToken is HyperToken, FeesManager {
         address _pool,
         address _wrappedNative,
         address _linkToken,
-        address _hyperLinkToken
+        address _hyperLinkToken,
+        address _factory
     ) public  {
         
         //emit Debug("ERC20Backed_hyperToken init called");
@@ -44,7 +45,8 @@ contract ERC20Backed_hyperToken is HyperToken, FeesManager {
             _motherChainId,
             name,
             symbol,
-            decimals
+            decimals,
+            _factory
         );
         //gas = gasleft();
         //emit DebugBytes("13Gas left: ", abi.encodePacked(gas));
@@ -65,6 +67,7 @@ contract ERC20Backed_hyperToken is HyperToken, FeesManager {
         require( motherChainId == 0, "Children doesn't HODL" ); // xD 
         IERC20(backingToken).safeTransferFrom(msg.sender, address(this), amount);
         int256 amountInt = int256(amount); //positive amount for mint
+        crossChainSupply += amount; //update cross chain supply
         IHyperTokenFactory(factory).updateSupply(
             address(this),
             amountInt,

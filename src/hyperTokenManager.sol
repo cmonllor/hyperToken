@@ -404,7 +404,7 @@ contract HyperTokenManager is IHyperTokenManager, FeesManager, Ownable {
         deployment memory initialDeployment; //in this chain
         initialDeployment.chainId = chainId; // Set the chain ID for the deployment
         initialDeployment.chainSupply = 0; // Initially set to 0
-        initialDeployment.waiting = false; // Initially not waiting for confirmation
+        initialDeployment.waiting = true; // Initially not waiting for confirmation
         hyperTokens[hyperNativeToken].deployments.push(initialDeployment);
         emit Debug("deployHyperNative: HyperNative deployment initialized in mother chain");
 
@@ -415,7 +415,7 @@ contract HyperTokenManager is IHyperTokenManager, FeesManager, Ownable {
             deployment memory deploymentInfo;
             deploymentInfo.chainId = chain; // Set the chain ID for the deployment
             deploymentInfo.chainSupply = 0; // Initially set to 0, will be updated later
-            deploymentInfo.waiting = false; // Initially not waiting for confirmation
+            deploymentInfo.waiting = true; // Initially not waiting for confirmation
             hyperTokens[hyperNativeToken].deployments.push(deploymentInfo);
             emit DebugBytes("deployHyperNative: added deployment for peer chain: ", abi.encodePacked(chain));
         }
@@ -457,10 +457,15 @@ contract HyperTokenManager is IHyperTokenManager, FeesManager, Ownable {
 
         // Update the deployment info for the specified chain
         uint256 deploymentIndex = getDeploymentIndex(hyperToken, chain);
-        deployment storage newDeployment = hyperTokens[hyperToken].deployments[deploymentIndex];
-        newDeployment.chainId = chain; // Set the chain ID for the deployment
-        newDeployment.chainSupply += chainSupply; // Set the chain supply for the deployment
-        newDeployment.waiting = true; // Initially waiting for confirmation        
+        emit DebugBytes("deployHyperTokenInChain: deployment index: ", abi.encodePacked(deploymentIndex));
+        emit DebugBytes("deployHyperTokenInChain: chain ID: ", abi.encodePacked(chain));
+        emit DebugBytes("deployHyperTokenInChain: chain supply: ", abi.encodePacked(chainSupply));
+        
+        hyperTokens[hyperToken].deployments[deploymentIndex].chainId = chain; // Set the chain ID for the deployment
+        hyperTokens[hyperToken].deployments[deploymentIndex].chainSupply += chainSupply; // Set the chain supply for the deployment
+        hyperTokens[hyperToken].deployments[deploymentIndex].waiting = true; // Initially waiting for confirmation        
+        emit DebugBytes("deployHyperTokenInChain: deployment info updated for chain: ", abi.encodePacked(chain));
+        emit DebugBytes("deployHyperTokenInChain: waiting status: ", abi.encodePacked(hyperTokens[hyperToken].deployments[deploymentIndex].waiting));
     }
 
     
@@ -471,7 +476,10 @@ contract HyperTokenManager is IHyperTokenManager, FeesManager, Ownable {
         // This function will be called by the factory when the deployment is done
         // It will update the deployment info for the specified chain
         uint256 deploymentIndex = getDeploymentIndex(hyperToken, chain);
+        emit DebugBytes("markDeploymentDone: deployment index: ", abi.encodePacked(deploymentIndex));
         hyperTokens[hyperToken].deployments[deploymentIndex].waiting = false; // Mark as done
+        emit DebugBytes("markDeploymentDone: deployment for chain: ", abi.encodePacked(chain));
+        emit DebugBytes("markDeploymentDone: waiting status: ", abi.encodePacked(hyperTokens[hyperToken].deployments[deploymentIndex].waiting));
         emit DeploymentReceived(hyperToken, chain);
     }
 
@@ -479,13 +487,18 @@ contract HyperTokenManager is IHyperTokenManager, FeesManager, Ownable {
     function isLastDeployment(
         address hyperToken,
         uint64 chain
-    ) external view onlyFactory returns (bool) {
+    ) external /*view*/ onlyFactory returns (bool) {
         // Check if the last deployment for the specified chain is waiting
-        uint256 deploymentIndex = getDeploymentIndex(hyperToken, chain);
         for( uint256 i = 0; i < hyperTokens[hyperToken].deployments.length; i++) {
-            if (hyperTokens[hyperToken].deployments[i].chainId == chain) {
+            if (
+                hyperTokens[hyperToken].deployments[i].chainId == chainId || // Skip the mother chain deployment
+                hyperTokens[hyperToken].deployments[i].chainId != chain // Skip if the chain ID does not match the specified chain
+            ) {
+                emit DebugBytes("isLastDeployment: skipping check deployment for chain: ", abi.encodePacked(chain));
                 continue;
             }
+            emit DebugBytes("isLastDeployment: checking deployment for chain: ", abi.encodePacked(hyperTokens[hyperToken].deployments[i].chainId));
+            emit DebugBytes("isLastDeployment: waiting status: ", abi.encodePacked(hyperTokens[hyperToken].deployments[i].waiting));
             if (hyperTokens[hyperToken].deployments[i].waiting) {
                 // If any deployment for the specified chain is still waiting, return false
                 return false;

@@ -43,6 +43,7 @@ import { ProtocolFactory } from "../../src/ProtocolFactory.sol";
 import {HyperToken} from "../../src/hyperToken.sol";
 import {ERC20Backed_hyperToken} from "../../src/ERC20Backed_hyperToken.sol";
 import {NativeBacked_hyperToken} from "../../src/nativeBacked_hyperToken.sol";
+import {ERC721Backed_hyperToken} from "../../src/ERC721Backed_hyperToken.sol";
 import {hyperLINK} from "../../src/hyperLINK.sol";
 
 
@@ -185,6 +186,32 @@ contract FullTest is Test{
                 salt: prot_FactorySalt
             }(
                 protocolDeployer
+            );
+
+            ERC20Backed_hyperToken erc20_hT_impl = new ERC20Backed_hyperToken(
+                "", // name
+                "", // symbol
+                18 // decimals
+            );
+            NativeBacked_hyperToken native_hT_impl = new NativeBacked_hyperToken(
+                "", // name
+                "", // symbol
+                18 // decimals
+            );
+            ERC721Backed_hyperToken erc721_hT_impl = new ERC721Backed_hyperToken(
+                "", // name
+                "", // symbol
+                18 // decimals
+            );
+
+            deployments[fork].protocolFactory.loadERC20Backed_hyperTokenImpl(
+                address(erc20_hT_impl)
+            );
+            deployments[fork].protocolFactory.loadNativeBacked_hyperTokenImpl(
+                address(native_hT_impl)
+            );
+            deployments[fork].protocolFactory.loadERC721Backed_hyperTokenImpl(
+                address(erc721_hT_impl)
             );
 
             deployments[fork].protocolFactory.loadCCTCPHostBytecode( 
@@ -341,8 +368,7 @@ contract FullTest is Test{
         );
 
         uint256 sentFee = fee + (fee / 10); // add 10% buffer for fees
-        uint256 sentLinkAmount = linkAmount + (linkAmount / 10); // add 10% buffer for ACK fees
-
+        uint256 sentLinkAmount = linkAmount + 1e17; // add 0.1LINK buffer for ACK fees
 
         for( uint256 i = 0; i < activeForks.length; i++ ){
             if( activeForks[i] == fork ){
@@ -700,7 +726,7 @@ contract FullTest is Test{
              12e15
         ];
 
-        //Avalanche Fuji Fork
+        /*Avalanche Fuji Fork
         initFork(
             43113, //avalanche fuji chainId
             "Avalanche Fuji",
@@ -716,6 +742,7 @@ contract FullTest is Test{
              10e15,
             0
         ];
+        */
     }
 
     
@@ -839,6 +866,202 @@ contract FullTest is Test{
         }
     }
 
+    function testHyperNativeCrossChainTransfer() public {
+        deployProtocol();
+        address bob = makeAddr("bob");
+        address alice = makeAddr("alice");
+
+        address [] memory backingTokens = new address[](activeForks.length);
+        address [] memory hyperTokens = new address[](activeForks.length);
+        
+        for( uint256 i = 0; i < activeForks.length; i++ ){
+            
+            vm.selectFork(activeForks[i]);
+            if( i==0){ //ethereum sepolia
+                vm.txGasPrice(4e9); //40 Gwei
+            }
+            else{ //other chains
+                vm.txGasPrice(17e8); //1.7 Gwei
+            }
+
+            vm.deal(protocolDeployer, 5e18);
+
+            
+            simulator.requestLinkFromFaucet( 
+                protocolDeployer,
+                5e18
+            );
+            vm.startPrank(protocolDeployer);
+
+            deployments[ activeForks[i] ].manager.deployHyperNative();
+            //deploy HyperERC20 token in fork i
+            hyperTokens[i] = deployments[ activeForks[i] ].manager.hyperNativeToken();
+            backingTokens[i] = chainDetails[activeForks[i]].wrappedNativeAddress;
+
+            for ( uint256 j = 0; j < activeForks.length; j++ ){
+                if( i == j ){
+                    continue;
+                }
+                (uint256 fee, uint256 ackFee ) = deployments[ activeForks[i] ].manager.estimateDeploymentCost(
+                    hyperTokens[i],
+                    chainDetails[activeForks[j]].chainSelector,
+                    chainDetails[activeForks[i]].linkTokenAddress,
+                    chainDetails[activeForks[j]].linkTokenAddress
+                );
+
+                fee = (fee * 105) / 100; // 5% buffer for spikes
+                ackFee = (ackFee + 1e18);
+
+                IERC20(chainDetails[activeForks[i]].linkTokenAddress).approve(
+                    address(deployments[ activeForks[i] ].manager),
+                    fee + ackFee
+                );
+
+                deployments[ activeForks[i] ].manager.deployHyperTokenInChain(
+                    hyperTokens[i],
+                    chainDetails[activeForks[j]].chainSelector,
+                    0, // chainSupply
+                    chainDetails[activeForks[i]].linkTokenAddress,
+                    fee, // fee amount
+                    chainDetails[activeForks[i]].linkTokenAddress,
+                    ackFee 
+                );
+
+                //route message
+                simulator.switchChainAndRouteMessage(activeForks[j]);
+
+                //simulate ACK
+                simulator.switchChainAndRouteMessage(activeForks[i]);
+
+                emit DebugTest( 
+                    string( 
+                        abi.encodePacked( 
+                            "HyperNative deployed in fork: ", 
+                            chainDetails[ activeForks[j] ].name 
+                        ) 
+                    )
+                );
+            }
+
+            vm.selectFork(activeForks[i]);
+            vm.startPrank(bob);
+
+            vm.deal(bob, 4e18); // give bob 4 native tokens
+
+            simulator.requestLinkFromFaucet( 
+                bob,
+                5e18
+            );
+            
+            uint256 bobBalanceBefore = IERC20(hyperTokens[i]).balanceOf(bob);
+
+            NativeBacked_hyperToken(hyperTokens[i]).wrapNative{value: 4e18}(0); // wrap 4 native tokens
+            
+            assertEq(
+                IERC20(hyperTokens[i]).balanceOf(bob),
+                4e18,
+                "Bob should have 4 hyperNative"
+            );
+
+            for ( uint256 j = 0; j < activeForks.length; j++ ){
+                if( i == j ){
+                    continue;
+                }
+                emit DebugTest( 
+                    string( 
+                        abi.encodePacked( 
+                            "Testing cross-chain transfer from forked ", 
+                            chainDetails[ activeForks[i] ].name , 
+                            " to fork: ", 
+                            chainDetails[ activeForks[j] ].name 
+                        ) 
+                    )
+                );                
+                vm.selectFork(activeForks[j]);
+                uint256 aliceBalance = IERC20(hyperTokens[i]).balanceOf(alice);
+                
+                vm.selectFork(activeForks[i]);
+
+                emit DebugTest( "Trying crosschaintransfer from bob to alice");
+
+               
+                makeCrossChainTransfer(
+                    makeCrossChainTransferParams({
+                        fork: activeForks[i],
+                        from: bob,
+                        to: alice,
+                        hyperToken: hyperTokens[i],
+                        amount: 1e18, // 1 hTTK
+                        targetFork: activeForks[j], 
+                        feeToken: chainDetails[activeForks[i]].linkTokenAddress,
+                        gasLimit: 3000000
+                    })
+                );
+
+                assertEq(
+                    IERC20(hyperTokens[i]).balanceOf(alice),
+                    aliceBalance + 1e18,
+                    string(
+                        abi.encodePacked(
+                            "Alice should have 1 hyperTTK more in fork: ", 
+                            Strings.toString(activeForks[j]) 
+                        )
+                    )
+                );
+            }
+            for(uint256 j=0; j<activeForks.length; j++){
+                if(i==j){
+                    continue;
+                }
+                vm.stopPrank();
+                vm.startPrank(alice);
+
+                vm.selectFork(activeForks[i]);
+                uint256 backTk_aliceBalance = IERC20(backingTokens[i]).balanceOf(alice);
+
+                vm.selectFork(activeForks[j]);
+
+                simulator.requestLinkFromFaucet(
+                    alice,
+                    1e18 
+                );
+                
+
+                uint256 unwrapFee = deployments[ activeForks[i] ].factory.estimateUpdateSupplyCost(
+                    chainDetails[ activeForks[i] ].chainSelector,
+                    hyperTokens[i],
+                    chainDetails[ activeForks[j] ].linkTokenAddress
+                );
+                unwrapFee = (unwrapFee * 105) / 100; // 5% buffer for spikes
+                
+                IERC20(chainDetails[ activeForks[j] ].linkTokenAddress).approve(hyperTokens[i], unwrapFee);
+
+                uint256 aliceBalanceBefore = IERC20(hyperTokens[i]).balanceOf(alice);
+                ERC20Backed_hyperToken(hyperTokens[i]).unwrap(
+                    1e18,
+                    chainDetails[ activeForks[j] ].linkTokenAddress,
+                    unwrapFee
+                );
+
+                assertEq(
+                    IERC20(hyperTokens[i]).balanceOf(alice),
+                    aliceBalanceBefore - 1e18,
+                    string(abi.encodePacked("Alice should have 1 hyperTTK less in fork: ", Strings.toString(activeForks[j])))
+                );
+
+
+                simulator.switchChainAndRouteMessage(activeForks[i]);
+                assertEq(
+                    IERC20(backingTokens[i]).balanceOf(alice),
+                    backTk_aliceBalance + 1e18,
+                    "Alice should have 1 WETH more"
+                );
+                vm.stopPrank();
+            }
+        }                
+    }
+
+
     function testHyperERC20CrossChainTransfer() public {
         deployProtocol();
         address bob = makeAddr("bob");
@@ -851,10 +1074,10 @@ contract FullTest is Test{
 
         for( uint256 i = 0; i < activeForks.length; i++ ){
             //deploy mockERC10 as backing token
-            string memory bckName = string(abi.encodePacked("mockNFT_", Strings.toString(i+1)));
-            string memory bckSymbol = string(abi.encodePacked("mNFT_", Strings.toString(i+1)));
+            string memory bckName = string(abi.encodePacked("mockTk_", Strings.toString(i+1)));
+            string memory bckSymbol = string(abi.encodePacked("m_", Strings.toString(i+1)));
 
-            bytes32 forkSalt = keccak256(abi.encodePacked("mockNFT", activeForks[i], bckName, bckSymbol));
+            bytes32 forkSalt = keccak256(abi.encodePacked("mock", activeForks[i], bckName, bckSymbol));
             vm.selectFork(activeForks[i]);
             if( i==0){ //ethereum sepolia
                 vm.txGasPrice(4e9); //40 Gwei

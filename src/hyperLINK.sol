@@ -21,7 +21,8 @@ contract hyperLINK is ERC20Backed_hyperToken {
 
     function init(
         uint64 _motherChainId,
-        address _linkToken
+        address _linkToken,
+        address _hTFactory
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         super.init(
             _motherChainId, 
@@ -32,7 +33,8 @@ contract hyperLINK is ERC20Backed_hyperToken {
             address(0), // pool will be set later
             address(0), // No wrapped native token needed for hyperLINK
             _linkToken, // link token itself for CrossChain transfers, won't be used
-            address(this) // hyperLINK token itself
+            address(this), // hyperLINK token itself
+            _hTFactory // factory address
         );        
     }
 
